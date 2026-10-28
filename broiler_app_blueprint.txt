@@ -1,0 +1,132 @@
+# ==========================================
+# BROILER POULTRY FARM MANAGEMENT APP BLUEPRINT
+# ==========================================
+# This document contains the complete structural blueprint, database schemas, 
+# and core application code (Dart/Flutter & SQL) based on our discussions.
+
+1. DATABASE LAYOUT (SQL Schema)
+================================
+Run this in your database manager or Supabase SQL Editor:
+
+-- Create Users Table (Farmers & Integration Supervisors)
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    full_name TEXT NOT NULL,
+    role TEXT CHECK (role IN ('farmer', 'supervisor', 'trader')),
+    district TEXT NOT NULL,
+    state TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- Create Active Broiler Batches Table
+CREATE TABLE broiler_batches (
+    batch_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    farmer_id UUID REFERENCES users(id),
+    breed_type TEXT DEFAULT 'Cobb 500',
+    chicks_placed INT NOT NULL,
+    placement_date DATE NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+-- Create Daily Progress Logs Table (Updates FCR & Performance)
+CREATE TABLE daily_logs (
+    log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    batch_id UUID REFERENCES broiler_batches(batch_id) ON DELETE CASCADE,
+    day_age INT NOT NULL,
+    daily_mortality INT DEFAULT 0,
+    feed_consumed_bags DECIMAL(5,2) NOT NULL,
+    avg_body_weight_grams DECIMAL(6,2),
+    water_intake_litres INT,
+    logged_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- Create Mandi Rates Table
+CREATE TABLE mandi_rates (
+    rate_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    date DATE NOT NULL,
+    state TEXT NOT NULL,
+    district TEXT NOT NULL,
+    broiler_rate_per_kg DECIMAL(5,2) NOT NULL,
+    logged_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+);
+
+
+2. FLUTTER PROJECT DIRECTORY STRUCTURE
+======================================
+broiler_farm_app/
+│
+├── lib/
+│   ├── main.dart                      # App entry point & initialization
+│   │
+│   ├── models/                        # Data Structures (Database Maps)
+│   │   ├── user_model.dart            
+│   │   ├── batch_model.dart           
+│   │   └── daily_log_model.dart       
+│   │
+│   ├── screens/                       # User Interfaces (UI Screens)
+│   │   ├── dashboard_screen.dart      # Main FCR, Live Weights, & Grid
+│   │   ├── daily_entry_screen.dart    # Feed & Mortality Inputs
+│   │   └── marketplace_screen.dart    # Live Mandi Rates
+│   │
+│   └── services/                      # Cloud Integration
+│       ├── supabase_service.dart      # Auto-Save Logic
+│       └── mandi_rate_service.dart    # Live Rates Stream
+│
+└── pubspec.yaml                       # Dependencies Specification
+
+
+3. CORE CORE LOGIC (lib/utils/poultry_formulas.dart)
+===================================================
+class PoultryFormulas {
+  static double calculateFCR({
+    required double totalFeedConsumedKg,
+    required int liveBirdsCount,
+    required double avgBodyWeightKg,
+  }) {
+    if (liveBirdsCount <= 0 || avgBodyWeightKg <= 0) return 0.0;
+    double totalLiveWeight = liveBirdsCount * avgBodyWeightKg;
+    double fcr = totalFeedConsumedKg / totalLiveWeight;
+    return double.parse(fcr.toStringAsFixed(2));
+  }
+
+  static int calculateLiveBirds({
+    required int initialChicksCount,
+    required int totalMortality,
+  }) {
+    int remaining = initialChicksCount - totalMortality;
+    return remaining < 0 ? 0 : remaining;
+  }
+}
+
+
+4. SUPABASE CLOUD SAVE ENGINE (lib/services/supabase_service.dart)
+==================================================================
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+class SupabaseService {
+  final SupabaseClient _client = Supabase.instance.client;
+
+  Future<bool> autoSaveDailyLog({
+    required String batchId,
+    required int dayAge,
+    required int dailyMortality,
+    required double feedConsumedBags,
+    required double avgWeightGrams,
+    required int waterLitres,
+  }) async {
+    try {
+      await _client.from('daily_logs').insert({
+        'batch_id': batchId,
+        'day_age': dayAge,
+        'daily_mortality': dailyMortality,
+        'feed_consumed_bags': feedConsumedBags,
+        'avg_body_weight_grams': avgWeightGrams,
+        'water_intake_litres': waterLitres,
+      });
+      return true; 
+    } catch (e) {
+      print("Auto-save failed: $e");
+      return false; 
+    }
+  }
+}
